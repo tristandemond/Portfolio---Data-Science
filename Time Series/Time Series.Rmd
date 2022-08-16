@@ -1,0 +1,183 @@
+---
+title: "San Diego's Ocean Water Monitoring Program"
+author: "Group 3"
+date: "11/14/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE,message=FALSE}
+# R Libraries
+library(astsa)
+library(RCurl)
+library(psych)
+library(dplyr)
+library(RSQLite)
+library(naniar)
+library(ggplot2)
+library(forecast)
+```
+
+```{r, warning=FALSE,message=FALSE}
+# Datasets (3 CSV files)
+csv1 <- getURL("http://seshat.datasd.org/pud/omp/water_quality_2011_2019_datasd.csv")
+csv2 <- getURL("http://seshat.datasd.org/pud/omp/water_quality_2000_2010_datasd.csv")
+csv3 <- getURL("http://seshat.datasd.org/pud/omp/water_quality_1990_1999_datasd.csv")
+stationsCSV <- getURL("http://seshat.datasd.org/pud/omp/reference_stations_water_quality.csv")
+csv1dl <- read.csv( text = csv1 )
+csv2dl <- read.csv( text = csv2 )
+csv3dl <- read.csv( text = csv3 )
+stationsdl <- read.csv( text = stationsCSV )
+```
+
+```{r, warning=FALSE,message=FALSE}
+# Bind data from 3 CSV files into one dataframe
+csvs <- rbind(csv1dl, csv2dl, csv3dl)
+# Bind stations data into dataframe
+stations <- rbind(stationsdl)
+```
+
+```{r, warning=FALSE,message=FALSE}
+conn <- dbConnect(RSQLite::SQLite(), "ADS506.db") # to create a SQL database in memory
+copy_to(conn,
+        csvs, # load csvs dataframe into SQL
+        overwrite = TRUE) # if exists, overwrite
+copy_to(conn,
+        stations, # load stations dataframe into SQL
+        overwrite = TRUE) # if exists, overwrite
+```
+
+```{r, warning=FALSE,message=FALSE}
+# combine information from both dataframes into one
+df <- dbGetQuery(conn, sql("
+SELECT csvs.*, s.lat, s.long 
+FROM csvs 
+left join stations as s 
+on csvs.station = s.[ï..station]
+"))
+# disconnect from database
+dbDisconnect(conn)
+# clean up data that is no longer needed
+rm(conn, csvs, csv1dl, csv2dl , csv3dl, csv1, csv2, csv3, stations, stationsdl, stationsCSV)
+```
+
+```{r}
+# Plot missing data
+vis_miss((df), warn_large_data = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+# remove all columns with missing data
+df <- na.omit(df)
+```
+
+```{r}
+# Plot missing data
+vis_miss((df), warn_large_data = FALSE) + 
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+# We are now left with 1,084,859 observations after dropping columns with missing data
+str(df)
+```
+
+```{r}
+# convert data_sample variable from "character" to "date" data type
+df$date_sample <- as.Date(df$date_sample)
+```
+
+```{r}
+# confirm date_sample is now Date format
+df %>% select(date_sample) %>% str()
+```
+
+```{r}
+# Add new variable from date_sample variable, comprised of "Month_Yr"
+df$sample_month_yr <- format(as.Date(df$date_sample), "%Y-%m")
+```
+
+```{r}
+# Sample 5 rows of date_sample and new variable side by side, to confirm new variable creation
+df %>% select(date_sample, sample_month_yr) %>% sample_n(5)
+```
+
+```{r, warning=FALSE,message=FALSE}
+# Variable "project" contains two values, PLOO (Point Loma) and SBOO (South Bay).
+# There is a disproportionate split in the data between both "project"s.
+df %>% group_by(project) %>% summarise(n=n()) %>% mutate(freq = n / sum(n))
+```
+
+```{r}
+# there are several "unit" types in the data.  We are going to select the "unit" type with
+# the highest representation
+df %>% group_by(units) %>% summarise(n=n()) %>% mutate(freq = n / sum(n))
+```
+
+```{r}
+# there are several "parameter" types in the data.  We are going to select the "parameter" type with
+# the highest representation
+df %>% group_by(parameter) %>% summarise(n=n()) %>% mutate(freq = n / sum(n))
+```
+
+```{r}
+# We will place each "project" into its respective dataframe, filtered for a specific unit and parameter type
+pl <- df %>% filter(project == "PLOO") %>% filter(units == "CFU/100 mL") %>% filter(parameter == "ENTERO")
+
+sb <- df %>% filter(project == "SBOO") %>% filter(units == "CFU/100 mL") %>% filter(parameter == "ENTERO")
+```
+
+
+```{r}
+# get month end value
+sb_mth_end <- sb %>% group_by(sample_month_yr) %>%  do(tail(., n=1))
+```
+
+
+```{r}
+# convert to TS
+sb_mth_end.val <- sb_mth_end[c('value')]
+df.ts <- ts(sb_mth_end.val, frequency=12, start=c(1999))
+df.ts
+```
+
+```{r}
+plot(df.ts)
+```
+
+```{r}
+# ACF shows significant autocorrelation. observations are not independent.
+par(mfrow = c(2, 1))
+acf(df.ts)
+pacf(df.ts)
+```
+
+
+```{r}
+diff_df.ts <- diff(df.ts)
+plot(diff_df.ts)
+```
+
+
+```{r}
+# ACF shows AR(1). PACF MA(2)?
+par(mfrow = c(2, 1))
+acf(diff_df.ts)
+pacf(diff_df.ts)
+```
+
+```{r}
+auto.arima(diff_df.ts)
+```
+
+```{r}
+sarima.for(diff_df.ts,6,4,0,2)
+```
+
+```{r}
+fit <- sarima(diff_df.ts, 4,0,2)
+```
