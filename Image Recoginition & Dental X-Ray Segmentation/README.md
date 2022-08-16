@@ -1,14 +1,6 @@
 # Semantic Segmentation with Dental X-Rays
 
-This project is part of the ADS-599 course in the Applied Data Science program at the University of San Diego.
-
 -**Project Status: Completed**
-
-## Collaborators
-
-* Dallin Munger
-* Jack McCullers
-* Tristan Demond
 
 ## Project Introduction
 
